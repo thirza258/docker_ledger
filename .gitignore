@@ -1,0 +1,80 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Coverage files
+*.out
+coverage.out
+
+# Go workspace
+go.work.sum
+
+# Vendor (ignore only if you don't commit vendor)
+vendor/
+
+# Build directories
+bin/
+dist/
+build/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Go
+bin/
+dist/
+build/
+*.test
+*.out
+coverage.out
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Docker volumes/data (if stored locally)
+data/
+postgres_data/
+chroma_data/
+
+# Generated binaries
+main
+app
+server
+api
+
+rest.http
