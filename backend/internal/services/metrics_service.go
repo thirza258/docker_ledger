@@ -17,7 +17,6 @@ func (s *ContainerService) GetContainerStats(ctx context.Context, containerID st
         return nil, err
     }
 
-    // Use ContainerStatsOptions with stream = false (one-shot)
     statsResult, err := cli.ContainerStats(ctx, containerID, client.ContainerStatsOptions{
         Stream: false, // return a single object, not a stream
     })

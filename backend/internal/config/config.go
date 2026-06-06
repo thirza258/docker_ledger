@@ -25,6 +25,10 @@ type Config struct {
 
     // Timeouts
     ShutdownTimeout time.Duration
+
+    OpenRouterAPIKey string
+    OpenRouterModel  string
+
 }
 
 // Load initializes configuration from .env file and environment variables.
@@ -47,6 +51,9 @@ func Load() *Config {
         DockerHost: getEnv("DOCKER_HOST", "unix:///var/run/docker.sock"),
 
         ShutdownTimeout: getEnvAsDuration("SHUTDOWN_TIMEOUT", 5*time.Second),
+
+        OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
+        OpenRouterModel:  getEnv("OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it"),
     }
 }
 

@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+
+# Dependencies
+node_modules
+
+# Build artifacts
+dist/
+build/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+Dockerfile
+nginx.conf
+.dockerignore
+
+# Misc
+README.md

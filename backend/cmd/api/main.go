@@ -40,6 +40,8 @@ func main() {
 	containerHandler := handlers.NewContainerHandler(containerService, logRepo)
 	wsHandler := websocket.NewLogStreamHandler(containerService)
 	multiLogHandler := websocket.NewMultiLogStreamHandler(containerService)
+	aiSummaryService := services.NewAISummaryService(cfg, logRepo)
+	aiSummaryHandler := handlers.NewAISummaryHandler(aiSummaryService)
 
 	containerRepo := storage.NewContainerRepository(gormDB)
 	_ = containerRepo
@@ -63,6 +65,7 @@ func main() {
         }
     })
 	http.HandleFunc("/logs/search", containerHandler.SearchLogs)
+	http.HandleFunc("/logs/summarize", aiSummaryHandler.GenerateSummary)
 
 	logCollector := collector.NewLogCollector(containerService, containerRepo, logRepo)
 

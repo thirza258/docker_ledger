@@ -61,4 +61,3 @@ func (h *ContainerHandler) GetContainer(w http.ResponseWriter, r *http.Request) 
     w.WriteHeader(http.StatusOK)
     json.NewEncoder(w).Encode(containerData)
 }
-// Future handlers: ListContainers, etc.

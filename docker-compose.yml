@@ -16,6 +16,59 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - dockerledger
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.151.0
+    container_name: dockerledge-telemetry
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml
+    ports:
+      - 4317:4317
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dockerledger-backend
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-dockerledger}
+      DB_SSLMODE: disable
+      SERVER_PORT: "8080"
+      DOCKER_HOST: unix:///var/run/docker.sock
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dockerledger
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dockerledger-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - dockerledger
 
 volumes:
   postgres_data:
+
+networks:
+  dockerledger:
+    driver: bridge

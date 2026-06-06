@@ -21,6 +21,7 @@ func (r *LogRepository) InsertLog(ctx context.Context, containerID, message, str
         ContainerID: containerID,
         Message:     message,
         Stream:      stream,
+        
         // Timestamp will be set by GORM's default: now()
     }
     return r.db.WithContext(ctx).Create(&logEntry).Error
@@ -66,5 +67,17 @@ func (r *LogRepository) SearchLogs(ctx context.Context, query, containerName str
     }
 
     err := db.Order("logs.timestamp DESC").Limit(limit).Find(&logs).Error
+    return logs, err
+}
+
+func (r *LogRepository) GetLogsSince(ctx context.Context, since time.Time, limit int) ([]models.LogEntry, error) {
+    var logs []models.LogEntry
+    err := r.db.WithContext(ctx).
+        Joins("JOIN containers ON containers.id = logs.container_id").
+        Select("logs.*, containers.name as container_name").
+        Where("logs.timestamp >= ?", since).
+        Order("logs.timestamp DESC").
+        Limit(limit).
+        Find(&logs).Error
     return logs, err
 }
