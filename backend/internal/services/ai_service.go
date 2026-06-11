@@ -103,6 +103,66 @@ Logs (format: [container_name] message):
     return prompt
 }
 
+func (s *AISummaryService) GenerateContainerSummary(ctx context.Context, containerName string, req SummaryRequest) (*SummaryResponse, error) {
+    // Defaults
+    if req.HoursBack == 0 {
+        req.HoursBack = 24
+    }
+    if req.Limit == 0 || req.Limit > 5000 {
+        req.Limit = 2000
+    }
+
+    since := time.Now().Add(-time.Duration(req.HoursBack) * time.Hour)
+
+    // Fetch logs only for the given container
+    logs, err := s.logRepo.GetLogsByContainerSince(ctx, containerName, since, req.Limit)
+    if err != nil {
+        return nil, fmt.Errorf("failed to fetch logs for container %s: %w", containerName, err)
+    }
+
+    if len(logs) == 0 {
+        return &SummaryResponse{
+            TopErrors:          []string{fmt.Sprintf("No logs for container '%s' in the last %d hours.", containerName, req.HoursBack)},
+            MostFailingContainers: []string{containerName},
+            SuggestedCauses:    []string{},
+        }, nil
+    }
+
+    // Build prompt that focuses on this container
+    prompt := buildContainerPrompt(containerName, logs)
+
+    raw, err := s.callOpenRouter(ctx, prompt)
+    if err != nil {
+        return nil, err
+    }
+
+    summary := parseAIResponse(raw)
+    summary.RawResponse = raw
+    return summary, nil
+}
+
+// buildContainerPrompt creates a tailored prompt for a single container.
+func buildContainerPrompt(containerName string, logs []models.LogEntry) string {
+    if len(logs) > 1000 {
+        logs = logs[:1000]
+    }
+
+    prompt := fmt.Sprintf(`You are a DevOps assistant. Analyze the following Docker logs for container "%s". Provide:
+1. Top 3 error messages (most frequent or severe)
+2. Suggested causes for these failures (be specific to this container)
+3. Any patterns or recurring warnings
+
+Be concise. Return the answer as JSON with keys: "top_errors" (array), "suggested_causes" (array), "patterns" (array).
+
+Logs:
+`, containerName)
+
+    for _, l := range logs {
+        prompt += fmt.Sprintf("[%s] %s\n", l.ContainerName, l.Message)
+    }
+    return prompt
+}
+
 // callOpenRouter sends request to OpenRouter API.
 func (s *AISummaryService) callOpenRouter(ctx context.Context, prompt string) (string, error) {
     apiKey := s.cfg.OpenRouterAPIKey

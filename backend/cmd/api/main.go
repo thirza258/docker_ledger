@@ -66,6 +66,7 @@ func main() {
     })
 	http.HandleFunc("/logs/search", containerHandler.SearchLogs)
 	http.HandleFunc("/logs/summarize", aiSummaryHandler.GenerateSummary)
+	http.HandleFunc("/logs/summarize/container", aiSummaryHandler.GenerateContainerSummary)
 
 	logCollector := collector.NewLogCollector(containerService, containerRepo, logRepo)
 
