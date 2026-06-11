@@ -50,9 +50,18 @@ func main() {
 	http.HandleFunc("/health/docker", containerHandler.DockerHealthCheck)
 	http.HandleFunc("/containers", containerHandler.ListContainers)
     http.HandleFunc("/containers/", func(w http.ResponseWriter, r *http.Request) {
-        if strings.HasSuffix(r.URL.Path, "/logs/live") {
-            wsHandler.ServeHTTP(w, r)
-        } else if strings.HasSuffix(r.URL.Path, "/logs") {
+		log.Printf(
+        "ROUTE HIT method=%s path=%s upgrade=%s",
+        r.Method,
+        r.URL.Path,
+        r.Header.Get("Upgrade"),
+    )
+
+    if strings.HasSuffix(r.URL.Path, "/logs/live") {
+        log.Printf("WS ROUTE DETECTED")
+        wsHandler.ServeHTTP(w, r)
+        return
+    } else if strings.HasSuffix(r.URL.Path, "/logs") {
             containerHandler.GetContainerLogs(w, r)
         } else if strings.HasSuffix(r.URL.Path, "/stats") { 
             containerHandler.GetContainerStats(w, r)

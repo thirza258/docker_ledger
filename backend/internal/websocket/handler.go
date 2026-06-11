@@ -4,7 +4,9 @@ import (
 	"strconv"
     "net/http"
     "strings"
+    "log"
 	"io"
+    "time"
 
     "github.com/gorilla/websocket"
     "github.com/thirzq/dockerledger/internal/services"
@@ -26,15 +28,19 @@ func NewLogStreamHandler(service *services.ContainerService) *LogStreamHandler {
 
 // ServeHTTP upgrades to WebSocket and streams Docker logs.
 func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    // Extract container ID from path: /containers/{id}/logs/live
+    log.Printf("[WS] PATH=%s", r.URL.Path)
     path := strings.TrimPrefix(r.URL.Path, "/containers/")
     parts := strings.Split(path, "/")
-    if len(parts) != 2 || parts[1] != "logs/live" {
-        http.Error(w, "Invalid path", http.StatusBadRequest)
-        return
+    log.Printf("[WS] TRIMMED PATH=%s", path)
+    log.Printf("[WS] PARTS=%v LEN=%d", parts, len(parts))
+    if len(parts) != 3 || parts[1] != "logs" || parts[2] != "live" {
+        log.Printf("[WS] Invalid path format")
+    http.Error(w, "Invalid path", http.StatusBadRequest)
+    return
     }
     containerID := parts[0]
     if containerID == "" {
+        log.Printf("[WS] Missing container ID in path")
         http.Error(w, "Container ID required", http.StatusBadRequest)
         return
     }
@@ -47,13 +53,14 @@ func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
             tail = t
         }
     }
+    log.Printf("[WS] Upgrade request path=%s", r.URL.Path)
 
-    // Upgrade connection
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
-        http.Error(w, "Failed to upgrade to WebSocket", http.StatusInternalServerError)
+        log.Printf("[WS] Upgrade FAILED: %v", err)
         return
     }
+    log.Printf("[WS] Upgrade SUCCESS container=%s", containerID)
     defer conn.Close()
 
     // Get log stream from Docker
@@ -69,9 +76,7 @@ func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     for {
         n, err := stream.Read(buf)
         if n > 0 {
-            // Docker multiplexed stream – we need to decode headers.
-            // We'll reuse our decodeDockerLogs function but adapt for streaming.
-            // Simpler: decode each chunk.
+         
             decoded := decodeLogChunk(buf[:n])
             if decoded != "" {
                 if err := conn.WriteMessage(websocket.TextMessage, []byte(decoded)); err != nil {
@@ -83,7 +88,9 @@ func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
             if err == io.EOF {
                 conn.WriteMessage(websocket.CloseMessage, []byte("Log stream ended"))
             }
-            break
+            log.Printf("[WS] stream error: %v", err)
+             time.Sleep(500 * time.Millisecond)
+            continue
         }
     }
 }

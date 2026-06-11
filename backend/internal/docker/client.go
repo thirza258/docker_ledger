@@ -15,7 +15,7 @@ var (
 func GetClient() (*client.Client, error) {
 	var err error
 	once.Do(func() {
-		cli, e := client.NewClientWithOpts(client.FromEnv, client.WithUserAgent("dockerledger/1.0.0"))
+		cli, e := client.New(client.FromEnv, client.WithUserAgent("dockerledger/1.0.0"))
 		if e != nil {
 			err = e
 			return
