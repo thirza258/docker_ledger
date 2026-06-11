@@ -177,11 +177,13 @@ export default function LogViewer({ containerId, containerName }) {
     }
   }, [])
 
-  // ── Build WebSocket URL ──
+
   const wsUrl = useMemo(() => {
     if (!containerId) return null
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.host}/api/containers/${containerId}/logs/live?tail=100`
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+
+    return `${protocol}//${window.location.host}/ws/containers/${containerId}/logs/live?tail=100`
   }, [containerId])
 
   // ── Process incoming log entries ──
