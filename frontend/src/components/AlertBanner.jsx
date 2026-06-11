@@ -1,5 +1,3 @@
-import { useState, useEffect } from 'react'
-
 const SEVERITY_ICONS = {
   error: (
     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">

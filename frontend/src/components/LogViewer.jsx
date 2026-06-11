@@ -5,6 +5,7 @@ const API_BASE = '/api'
 const MAX_LINES = 10000
 const MAX_BUFFER = 5000
 
+
 // ── TICKET-020: Severity detection ──
 const SEVERITY_PATTERNS = [
   { level: 'fatal',   regex: /\b(FATAL|FATALITY)\b/i,  label: 'FATAL', color: 'bg-fuchsia-600 text-white' },
@@ -386,6 +387,7 @@ export default function LogViewer({ containerId, containerName }) {
       setShowServerSearch(true)
     } catch (err) {
       setServerResults([])
+      console.error('Search error:', err)
       setShowServerSearch(true)
     } finally {
       setSearchLoading(false)

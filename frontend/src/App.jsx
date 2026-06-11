@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import LogViewer from './components/LogViewer.jsx'
+import AISummary from './components/AISummary.jsx'
 
 const API_BASE = '/api'
 
@@ -94,9 +95,11 @@ function App() {
     <div className="min-h-screen flex flex-col bg-white text-gray-700">
       {/* Header */}
       <header className="sticky top-0 z-10 bg-white border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-baseline gap-3">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-baseline gap-3 flex-wrap">
           <h1 className="text-xl font-bold text-gray-900 tracking-tight">DockerLedger</h1>
           <span className="text-sm text-gray-400 font-normal">Container Monitor</span>
+          <span className="flex-1" />
+          <AISummary />
         </div>
       </header>
 
@@ -245,6 +248,11 @@ function App() {
                     )}
                   </div>
                 )}
+
+                <div className="mt-4 pt-4 border-t border-gray-200">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-2.5">AI Analysis</h3>
+                  <AISummary containerName={(selected.Names || [])[0] || ''} />
+                </div>
 
               </>
             ) : (
