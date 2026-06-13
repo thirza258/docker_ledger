@@ -1,0 +1,10 @@
+listen_addr: ":8081"
+admin_enabled: true
+admin_addr: "127.0.0.1:8082"
+idle_timeout: 3h
+services:
+  - name: myapp
+    host: myapp.local
+    container: my-container-name
+    port: 80
+    network: mynetwork   # optional

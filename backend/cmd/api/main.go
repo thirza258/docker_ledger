@@ -18,6 +18,7 @@ import (
 	"github.com/thirzq/dockerledger/internal/database"
 	"github.com/thirzq/dockerledger/internal/storage"
 	"github.com/thirzq/dockerledger/internal/collector"
+	"github.com/thirzq/dockerledger/internal/wakeproxy"
 	
 )
 
@@ -27,6 +28,48 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	var proxyServer *http.Server
+    if cfg.Wakeproxy != nil && cfg.Wakeproxy.ListenAddr != "" {
+        mgr, err := wakeproxy.NewManager(cfg.Wakeproxy)
+        if err != nil {
+            log.Fatalf("Failed to create wakeproxy manager: %v", err)
+        }
+
+        proxyHandler := wakeproxy.NewProxyHandler(mgr)
+
+        proxyServer = &http.Server{
+            Addr:    cfg.Wakeproxy.ListenAddr,
+            Handler: proxyHandler,
+        }
+        go func() {
+            log.Printf("WakeProxy listening on %s", cfg.Wakeproxy.ListenAddr)
+            if err := proxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+                log.Fatalf("WakeProxy server failed: %v", err)
+            }
+        }()
+
+        if cfg.Wakeproxy.AdminEnabled && cfg.Wakeproxy.AdminAddr != "" {
+            adminMux := http.NewServeMux()
+            adminServer := wakeproxy.NewAdminServer(mgr)
+            adminServer.RegisterHandlers(adminMux)
+
+            // Also register wakeproxy admin routes on the main API server
+            // so the frontend can reach them via /api/wakeproxy/…
+            adminServer.RegisterMainRoutes(http.DefaultServeMux)
+
+            adminSrv := &http.Server{
+                Addr:    cfg.Wakeproxy.AdminAddr,
+                Handler: adminMux,
+            }
+            go func() {
+                log.Printf("WakeProxy admin listening on %s", cfg.Wakeproxy.AdminAddr)
+                if err := adminSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+                    log.Fatalf("WakeProxy admin server failed: %v", err)
+                }
+            }()
+        }
+    }
 
 	gormDB, err := database.NewGormConnection(cfg)
     if err != nil {
@@ -100,10 +143,13 @@ func main() {
 	<-ctx.Done()
     log.Println("Shutting down gracefully...")
 
-
-    // Give the collector time to flush
-    
-	// Graceful shutdown
+	if proxyServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := proxyServer.Shutdown(ctx); err != nil {
+			log.Printf("WakeProxy shutdown error: %v", err)
+		}
+	}
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

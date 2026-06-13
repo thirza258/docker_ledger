@@ -6,6 +6,7 @@ import (
     "time"
 
     "github.com/joho/godotenv"
+    "github.com/thirzq/dockerledger/internal/wakeproxy"
 )
 
 type Config struct {
@@ -28,6 +29,8 @@ type Config struct {
 
     OpenRouterAPIKey string
     OpenRouterModel  string
+
+    Wakeproxy *wakeproxy.Config `yaml:"wakeproxy"`
 
 }
 
