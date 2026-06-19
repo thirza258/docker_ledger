@@ -34,8 +34,7 @@ func NewGormConnection(cfg *config.Config) (*gorm.DB, error) {
     sqlDB.SetMaxIdleConns(10)
     sqlDB.SetConnMaxLifetime(5 * time.Minute)
 
-    // Auto‑migrate schemas
-    if err := db.AutoMigrate(&models.Container{}, &models.LogEntry{}); err != nil {
+    if err := db.AutoMigrate(&models.Container{}, &models.LogEntry{}, &models.WakeProxyState{}); err != nil {
         return nil, fmt.Errorf("auto‑migration failed: %w", err)
     }
 

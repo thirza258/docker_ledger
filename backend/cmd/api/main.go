@@ -128,13 +128,13 @@ func main() {
 
 	// Start server
 	server := &http.Server{
-		Addr:         "0.0.0.0:8080",
+		Addr:         "0.0.0.0:" + cfg.ServerPort,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
 	go func() {
-		log.Println("Server starting on :8080")
+		log.Println("Server starting on :" + cfg.ServerPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
