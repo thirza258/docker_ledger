@@ -1,0 +1,166 @@
+# DockerLedger
+
+DockerLedger is a container operations dashboard built around Docker, Postgres, Go, and React. It lets you inspect running containers, view stats and logs, search historical logs, generate AI summaries of log activity, and manage WakeProxy-style services that can start containers on demand.
+
+## What It Does
+
+- Lists Docker containers and shows their state, image, ID, and basic stats.
+- Streams live logs over WebSockets and keeps a searchable log history in Postgres.
+- Generates AI summaries of recent logs through OpenRouter.
+- Exposes WakeProxy administration for host-based reverse proxy services.
+- Ships as a Docker Compose stack with a Go API, React frontend, and Postgres database.
+
+## Stack
+
+- Backend: Go 1.26.3, GORM, Docker client, Gorilla WebSocket, OpenTelemetry
+- Frontend: React 19, Vite, Tailwind CSS 4
+- Database: Postgres 16
+- Runtime: Docker Compose
+
+## Repository Layout
+
+- `backend/` - Go API, Docker integration, storage, telemetry, and WakeProxy code.
+- `frontend/` - React app for the dashboard UI.
+- `docker-compose.yml` - Local multi-container stack.
+- `otel-collector.yaml` - OTEL collector config path referenced by Compose.
+
+## Requirements
+
+- Docker and Docker Compose
+- Access to the Docker daemon socket from the backend
+- Postgres 16 if you run the backend without Compose
+- An OpenRouter API key if you want AI summaries
+
+## Quick Start
+
+1. Set up your environment variables.
+2. Start the stack with Docker Compose.
+3. Open the frontend in your browser.
+
+```bash
+docker compose up --build
+```
+
+By default:
+
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:8080`
+- Postgres: `localhost:5432`
+
+## Local Development
+
+### Backend
+
+```bash
+cd backend
+go run ./cmd/api
+```
+
+The backend expects:
+
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSLMODE`
+- `SERVER_PORT`
+- `DOCKER_HOST`
+- `OPENROUTER_API_KEY` for AI summaries
+- `OPENROUTER_MODEL` if you want to override the default model
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite dev server proxies `/api` and `/ws` to `http://localhost:8080`, so the frontend can talk to the backend without a separate reverse proxy.
+
+## Docker Compose
+
+The Compose file starts:
+
+- `postgres` on port `5432`
+- `backend` on port `8080`
+- `frontend` on port `3000`
+- `otel-collector` for tracing
+
+The backend container mounts `/var/run/docker.sock` so it can inspect containers, collect logs, and support WakeProxy-managed services when enabled.
+
+If you want tracing to work, make sure the collector config mounted by Compose exists at the path referenced in `docker-compose.yml`.
+
+## Environment Variables
+
+### Database
+
+- `DB_HOST` - database host, default `localhost`
+- `DB_PORT` - database port, default `5432`
+- `DB_USER` - database user, default `postgres`
+- `DB_PASSWORD` - database password
+- `DB_NAME` - database name, default `dockerledger`
+- `DB_SSLMODE` - Postgres SSL mode, default `disable`
+
+### Server
+
+- `SERVER_PORT` - backend HTTP port, default `8080`
+- `DOCKER_HOST` - Docker daemon endpoint, default `unix:///var/run/docker.sock`
+
+### AI Summary
+
+- `OPENROUTER_API_KEY` - required for AI summaries
+- `OPENROUTER_MODEL` - model name, default `google/gemma-4-26b-a4b-it`
+
+### Telemetry
+
+- `OTEL_SERVICE_NAME` - OpenTelemetry service name
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP gRPC endpoint, default `otel-collector:4317`
+- `ENV` - included as a telemetry resource attribute
+
+## API Surface
+
+### Containers
+
+- `GET /health/docker` - Docker daemon health check
+- `GET /containers` - list containers
+- `GET /containers/{id}` - inspect a container
+- `GET /containers/{id}/stats` - fetch container stats
+- `GET /containers/{id}/logs?tail=100` - fetch recent logs
+
+### Log Search and AI
+
+- `GET /logs/search?q=...` - search historical logs
+- `GET /logs/summarize?hours_back=24&limit=2000` - summarize recent logs
+- `GET /logs/summarize/container?container_name=...` - summarize one container
+
+### WakeProxy
+
+- `GET /wakeproxy/services`
+- `POST /wakeproxy/services`
+- `POST /wakeproxy/services/{name}/activate`
+- `POST /wakeproxy/services/{name}/deactivate`
+
+### WebSockets
+
+- `GET /ws/containers/{id}/logs/live?tail=100` - live log stream
+
+## WakeProxy Notes
+
+The backend includes a WakeProxy manager that:
+
+- Maps hostnames to containers.
+- Starts a container when traffic arrives for its host.
+- Builds a reverse proxy to the container IP and port.
+- Stops idle services after the configured timeout.
+
+`backend/wakeproxy.yaml` shows the expected configuration shape for WakeProxy services.
+
+## Behavior Notes
+
+- The backend auto-migrates database tables on startup.
+- The log collector follows running containers and stores logs in Postgres.
+- The UI has separate views for container management and WakeProxy service management.
+- AI summaries are generated from recent logs and depend on OpenRouter being configured.
+
+## Security
+
+- Do not commit API keys or database credentials.
+- Provide your own local `.env` file or environment variables when running the project.
+- The Docker socket gives the backend broad access to the host Docker daemon, so only run it on machines you trust.

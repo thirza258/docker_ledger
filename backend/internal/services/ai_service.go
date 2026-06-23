@@ -52,7 +52,6 @@ func (s *AISummaryService) GenerateSummary(ctx context.Context, req SummaryReque
         req.Limit = 2000
     }
 
-    // Fetch logs from DB (last N hours, error logs only? We'll fetch all but emphasize errors)
     since := time.Now().Add(-time.Duration(req.HoursBack) * time.Hour)
     logs, err := s.logRepo.GetLogsSince(ctx, since, req.Limit)
     if err != nil {
