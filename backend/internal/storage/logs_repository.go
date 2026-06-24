@@ -83,12 +83,26 @@ func (r *LogRepository) GetLogsSince(ctx context.Context, since time.Time, limit
     return logs, err
 }
 
-func (r *LogRepository) GetLogsByContainerSince(ctx context.Context, containerName string, since time.Time, limit int) ([]models.LogEntry, error) {
+func (r *LogRepository) GetLogsByContainerSince(
+    ctx context.Context,
+    containerName string,
+    since time.Time,
+    limit int,
+) ([]models.LogEntry, error) {
+
+    var container models.Container
+    if err := r.db.WithContext(ctx).
+        Where("name = ?", containerName).
+        First(&container).Error; err != nil {
+        return nil, err
+    }
+
     var logs []models.LogEntry
     err := r.db.WithContext(ctx).
-        Where("container_name = ? AND timestamp >= ?", containerName, since).
+        Where("container_id = ? AND timestamp >= ?", container.ID, since).
         Order("timestamp DESC").
         Limit(limit).
         Find(&logs).Error
+
     return logs, err
 }
