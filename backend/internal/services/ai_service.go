@@ -271,6 +271,8 @@ func (s *AISummaryService) callOpenRouter(ctx context.Context, prompt string) (s
     if err != nil {
         return "", err
     }
+    req.Header.Set("HTTP-Referer", "www.nevatal.tech")
+    req.Header.Set("X-Title", "DockerLedger")
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("Authorization", "Bearer "+apiKey)
 

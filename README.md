@@ -12,7 +12,7 @@ DockerLedger is a container operations dashboard built around Docker, Postgres, 
 
 ## Stack
 
-- Backend: Go 1.26.3, GORM, Docker client, Gorilla WebSocket, OpenTelemetry
+- Backend: Go 1.26.3, GORM, Docker client, Gorilla WebSocket
 - Frontend: React 19, Vite, Tailwind CSS 4
 - Database: Postgres 16
 - Runtime: Docker Compose
@@ -22,7 +22,6 @@ DockerLedger is a container operations dashboard built around Docker, Postgres, 
 - `backend/` - Go API, Docker integration, storage, telemetry, and WakeProxy code.
 - `frontend/` - React app for the dashboard UI.
 - `docker-compose.yml` - Local multi-container stack.
-- `otel-collector.yaml` - OTEL collector config path referenced by Compose.
 
 ## Requirements
 
@@ -81,7 +80,6 @@ The Compose file starts:
 - `postgres` on port `5432`
 - `backend` on port `8080`
 - `frontend` on port `3000`
-- `otel-collector` for tracing
 
 The backend container mounts `/var/run/docker.sock` so it can inspect containers, collect logs, and support WakeProxy-managed services when enabled.
 
@@ -108,11 +106,6 @@ If you want tracing to work, make sure the collector config mounted by Compose e
 - `OPENROUTER_API_KEY` - required for AI summaries
 - `OPENROUTER_MODEL` - model name, default `google/gemma-4-26b-a4b-it`
 
-### Telemetry
-
-- `OTEL_SERVICE_NAME` - OpenTelemetry service name
-- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP gRPC endpoint, default `otel-collector:4317`
-- `ENV` - included as a telemetry resource attribute
 
 ## API Surface
 
@@ -159,8 +152,3 @@ The backend includes a WakeProxy manager that:
 - The UI has separate views for container management and WakeProxy service management.
 - AI summaries are generated from recent logs and depend on OpenRouter being configured.
 
-## Security
-
-- Do not commit API keys or database credentials.
-- Provide your own local `.env` file or environment variables when running the project.
-- The Docker socket gives the backend broad access to the host Docker daemon, so only run it on machines you trust.
