@@ -8,18 +8,19 @@ import (
 	"github.com/thirzq/dockerledger/internal/models"
 	"github.com/thirzq/dockerledger/internal/services"
 	"github.com/thirzq/dockerledger/internal/storage"
+	"github.com/thirzq/dockerledger/internal/telemetry"
 )
 
 type ContainerHandler struct {
-    service  *services.ContainerService
-    logRepo  *storage.LogRepository 
+	service  *services.ContainerService
+	logRepo  *storage.LogRepository
 }
 
 func NewContainerHandler(service *services.ContainerService, logRepo *storage.LogRepository) *ContainerHandler {
-    return &ContainerHandler{
-        service: service,
-        logRepo: logRepo,
-    }
+	return &ContainerHandler{
+		service: service,
+		logRepo: logRepo,
+	}
 }
 func (h *ContainerHandler) DockerHealthCheck(w http.ResponseWriter, r *http.Request) {
 	connected := h.service.IsDockerConnected(r.Context())
@@ -33,6 +34,7 @@ func (h *ContainerHandler) DockerHealthCheck(w http.ResponseWriter, r *http.Requ
 func (h *ContainerHandler) ListContainers(w http.ResponseWriter, r *http.Request) {
 	containers, err := h.service.ListContainers(r.Context())
 	if err != nil {
+		telemetry.WithRequestID(r.Context()).Error("failed to list containers", "error", err)
 		http.Error(w, "Failed to list containers", http.StatusInternalServerError)
 		return
 	}
@@ -44,20 +46,21 @@ func (h *ContainerHandler) ListContainers(w http.ResponseWriter, r *http.Request
 }
 
 func (h *ContainerHandler) GetContainer(w http.ResponseWriter, r *http.Request) {
-    // Extract container ID from URL path: /containers/{id}
-    id := strings.TrimPrefix(r.URL.Path, "/containers/")
-    if id == "" {
-        http.Error(w, "Container ID required", http.StatusBadRequest)
-        return
-    }
-
-    containerData, err := h.service.GetContainerByID(r.Context(), id)
-    if err != nil {
-        http.Error(w, "Failed to get container details", http.StatusInternalServerError)
+	// Extract container ID from URL path: /containers/{id}
+	id := strings.TrimPrefix(r.URL.Path, "/containers/")
+	if id == "" {
+		http.Error(w, "Container ID required", http.StatusBadRequest)
 		return
-    }
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(containerData)
+	containerData, err := h.service.GetContainerByID(r.Context(), id)
+	if err != nil {
+		telemetry.WithRequestID(r.Context()).Error("failed to get container", "container_id", id, "error", err)
+		http.Error(w, "Failed to get container details", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(containerData)
 }

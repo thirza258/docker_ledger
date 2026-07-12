@@ -2,9 +2,10 @@ package docker
 
 import (
 	"context"
-	"github.com/moby/moby/client"
-	"log"
+	"log/slog"
 	"sync"
+
+	"github.com/moby/moby/client"
 )
 
 var (
@@ -21,7 +22,7 @@ func GetClient() (*client.Client, error) {
 			return
 		}
 		clientInstance = cli
-		log.Println("Docker client initialized")
+		slog.Info("Docker client initialized")
 	})
 	return clientInstance, err
 }

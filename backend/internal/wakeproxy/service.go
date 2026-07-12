@@ -3,6 +3,7 @@ package wakeproxy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sync"
 	"time"
@@ -101,9 +102,12 @@ func (s *ManagedService) startupSequence() {
 	}
 	s.mu.Unlock()
 
+	slog.Info("wakeproxy: starting container for service", "service", s.Config.Name, "container", s.Config.Container)
+
 	// 1. Start container via Docker
 	containerID, err := s.manager.DockerStart(s.Config.Container)
 	if err != nil {
+		slog.Error("wakeproxy: failed to start container, reverting to stopped", "service", s.Config.Name, "container", s.Config.Container, "error", err)
 		s.mu.Lock()
 		s.state = StateStopped
 		s.cond.Broadcast()
@@ -113,12 +117,12 @@ func (s *ManagedService) startupSequence() {
 	s.containerID = containerID
 
 	// 2. No health check – just wait a short moment for the container to be ready
-	// (you can add a small fixed delay if needed, e.g. 2 seconds)
 	time.Sleep(2 * time.Second)
 
 	// 3. Get container IP and build target URL
 	target, err := s.manager.GetContainerTarget(s)
 	if err != nil {
+		slog.Error("wakeproxy: failed to get container target, reverting to stopped", "service", s.Config.Name, "container_id", containerID, "error", err)
 		s.mu.Lock()
 		s.state = StateStopped
 		s.cond.Broadcast()
@@ -133,6 +137,8 @@ func (s *ManagedService) startupSequence() {
 	s.state = StateRunning
 	s.cond.Broadcast()
 	s.mu.Unlock()
+
+	slog.Info("wakeproxy: service running", "service", s.Config.Name, "container_id", containerID, "target", target.String())
 
 	// 5. Start idle timer (3 hours)
 	s.resetIdleTimer()

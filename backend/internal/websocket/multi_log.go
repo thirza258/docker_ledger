@@ -1,75 +1,80 @@
 package websocket
 
 import (
-    "context"
-    "net/http"
-    "sync"
+	"context"
+	"net/http"
+	"sync"
 
-    "github.com/gorilla/websocket"
-    "github.com/thirzq/dockerledger/internal/services"
+	"github.com/gorilla/websocket"
+	"github.com/thirzq/dockerledger/internal/services"
+	"github.com/thirzq/dockerledger/internal/telemetry"
 )
 
-
-
 type MultiLogStreamHandler struct {
-    service *services.ContainerService
+	service *services.ContainerService
 }
 
 func NewMultiLogStreamHandler(service *services.ContainerService) *MultiLogStreamHandler {
-    return &MultiLogStreamHandler{service: service}
+	return &MultiLogStreamHandler{service: service}
 }
 
 func (h *MultiLogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    conn, err := upgrader.Upgrade(w, r, nil)
-    if err != nil {
-        http.Error(w, "WebSocket upgrade failed", http.StatusInternalServerError)
-        return
-    }
-    defer conn.Close()
+	log := telemetry.WithRequestID(r.Context())
 
-    ctx, cancel := context.WithCancel(r.Context())
-    defer cancel()
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Error("ws multi-log upgrade failed", "error", err)
+		http.Error(w, "WebSocket upgrade failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
 
-    // Get all running containers
-    containers, err := h.service.GetAllRunningContainers(ctx)
-    if err != nil {
-        conn.WriteMessage(websocket.CloseMessage, []byte("Failed to list containers: "+err.Error()))
-        return
-    }
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 
-    var wg sync.WaitGroup
-    merged := make(chan string, 200)
+	// Get all running containers
+	containers, err := h.service.GetAllRunningContainers(ctx)
+	if err != nil {
+		log.Error("ws multi-log failed to list containers", "error", err)
+		conn.WriteMessage(websocket.CloseMessage, []byte("Failed to list containers: "+err.Error()))
+		return
+	}
+	log.Info("ws multi-log connected", "containers", len(containers))
 
-    // Start a follower for each container
-    for _, c := range containers {
-        logChan, cancelFunc, err := h.service.FollowContainerLogs(ctx, c.ID, c.Name)
-        if err != nil {
-            continue
-        }
-        defer cancelFunc()
-        wg.Add(1)
-        go func(ch <-chan string) {
-            defer wg.Done()
-            for msg := range ch {
-                select {
-                case merged <- msg:
-                case <-ctx.Done():
-                    return
-                }
-            }
-        }(logChan)
-    }
+	var wg sync.WaitGroup
+	merged := make(chan string, 200)
 
-    // Close merged when all followers are done
-    go func() {
-        wg.Wait()
-        close(merged)
-    }()
+	// Start a follower for each container
+	for _, c := range containers {
+		logChan, cancelFunc, err := h.service.FollowContainerLogs(ctx, c.ID, c.Name)
+		if err != nil {
+			log.Warn("ws multi-log failed to follow container", "container", c.Name, "container_id", c.ID, "error", err)
+			continue
+		}
+		defer cancelFunc()
+		wg.Add(1)
+		go func(ch <-chan string) {
+			defer wg.Done()
+			for msg := range ch {
+				select {
+				case merged <- msg:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(logChan)
+	}
 
-    // Send each log message to the WebSocket client
-    for msg := range merged {
-        if err := conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
-            break
-        }
-    }
+	// Close merged when all followers are done
+	go func() {
+		wg.Wait()
+		close(merged)
+	}()
+
+	// Send each log message to the WebSocket client
+	for msg := range merged {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
+			break
+		}
+	}
 }

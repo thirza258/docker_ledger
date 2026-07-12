@@ -3,6 +3,7 @@ package wakeproxy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sync"
 	"time"
@@ -41,7 +42,9 @@ func NewManager(cfg *Config) (*Manager, error) {
 		svc := NewManagedService(svcCfg, m)
 		m.services[svcCfg.Name] = svc
 		m.hostIndex[svcCfg.Host] = svcCfg.Name
+		slog.Info("wakeproxy: registered service", "name", svcCfg.Name, "host", svcCfg.Host, "container", svcCfg.Container)
 	}
+	slog.Info("wakeproxy: manager initialized", "services", len(m.services))
 	return m, nil
 }
 
@@ -75,6 +78,7 @@ func (m *Manager) AddService(cfg ServiceConfig) error {
 	svc := NewManagedService(cfg, m)
 	m.services[cfg.Name] = svc
 	m.hostIndex[cfg.Host] = cfg.Name
+	slog.Info("wakeproxy: dynamically added service", "name", cfg.Name, "host", cfg.Host, "container", cfg.Container)
 	return nil
 }
 
@@ -92,15 +96,18 @@ func (m *Manager) DockerStart(containerName string) (string, error) {
 	ctx := context.Background()
 	insp, err := m.cli.ContainerInspect(ctx, containerName, client.ContainerInspectOptions{})
 	if err != nil {
+		slog.Error("wakeproxy: container inspect failed", "container", containerName, "error", err)
 		return "", fmt.Errorf("inspect: %w", err)
 	}
 	if insp.Container.State.Running {
 		return insp.Container.ID, nil
 	}
-	
+
 	if _, err := m.cli.ContainerStart(ctx, insp.Container.ID, client.ContainerStartOptions{}); err != nil {
+		slog.Error("wakeproxy: container start failed", "container", containerName, "error", err)
 		return "", fmt.Errorf("start: %w", err)
 	}
+	slog.Info("wakeproxy: container started", "container", containerName, "id", insp.Container.ID)
 	return insp.Container.ID, nil
 }
 
@@ -114,7 +121,9 @@ func (m *Manager) DockerStop(containerID string) error {
 			Timeout: &timeout,
 		},
 	)
-
+	if err != nil {
+		slog.Error("wakeproxy: container stop failed", "container_id", containerID, "error", err)
+	}
 	return err
 }
 
@@ -125,6 +134,7 @@ func (m *Manager) GetContainerTarget(svc *ManagedService) (*url.URL, error) {
 		client.ContainerInspectOptions{},
 	)
 	if err != nil {
+		slog.Error("wakeproxy: container target inspect failed", "container_id", svc.containerID, "service", svc.Config.Name, "error", err)
 		return nil, err
 	}
 
@@ -157,5 +167,6 @@ func (m *Manager) StopService(svc *ManagedService) {
 	if svc.containerID == "" {
 		return
 	}
+	slog.Info("wakeproxy: stopping service due to idle timeout", "service", svc.Config.Name, "container_id", svc.containerID)
 	_ = m.DockerStop(svc.containerID)
 }

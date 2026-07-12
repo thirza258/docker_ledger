@@ -2,6 +2,7 @@ package storage
 
 import (
     "context"
+    "log/slog"
     "time"
 
     "gorm.io/gorm"
@@ -105,4 +106,22 @@ func (r *LogRepository) GetLogsByContainerSince(
         Find(&logs).Error
 
     return logs, err
+}
+
+// DeleteLogsBefore removes log entries older than the given cutoff.
+// Returns the number of rows deleted.
+func (r *LogRepository) DeleteLogsBefore(ctx context.Context, before time.Time) (int64, error) {
+    result := r.db.WithContext(ctx).
+        Where("timestamp < ?", before).
+        Delete(&models.LogEntry{})
+    if result.Error != nil {
+        return 0, result.Error
+    }
+    if result.RowsAffected > 0 {
+        slog.Info("log retention cleanup",
+            "deleted", result.RowsAffected,
+            "before", before.Format(time.RFC3339),
+        )
+    }
+    return result.RowsAffected, nil
 }

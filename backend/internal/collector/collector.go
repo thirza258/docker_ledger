@@ -3,7 +3,7 @@ package collector
 import (
     "context"
     "encoding/json"
-    "log"
+    "log/slog"
     "sync"
     "time"
 
@@ -42,9 +42,10 @@ func NewLogCollector(
     }
 }
 
-// Start begins collecting logs and the batch writer.
+// Start begins collecting logs, the batch writer, and retention cleanup.
 func (c *LogCollector) Start(ctx context.Context) {
     go c.batchWriter(ctx)
+    go c.retentionLoop(ctx)
     c.attachToAllRunning(ctx)
     go c.watchEvents(ctx)
 }
@@ -70,7 +71,7 @@ func (c *LogCollector) batchWriter(ctx context.Context) {
             ctxTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
             defer cancel()
             if err := c.logRepo.BatchInsertLogs(ctxTimeout, entries); err != nil {
-                log.Printf("Batch insert failed: %v", err)
+                slog.Error("batch insert failed", "error", err)
                 // Optionally, you could re-queue them, but for simplicity we drop.
             }
         }(toInsert)
@@ -111,13 +112,13 @@ func (c *LogCollector) attachToContainer(parentCtx context.Context, containerID,
 
     // Upsert container into DB
     if err := c.containerRepo.Upsert(ctx, containerID, containerName); err != nil {
-        log.Printf("Failed to upsert container %s: %v", containerID, err)
+        slog.Error("failed to upsert container", "container_id", containerID, "error", err)
     }
 
     // Get log stream (from service)
     logChan, _, err := c.dockerService.FollowContainerLogs(ctx, containerID, containerName)
     if err != nil {
-        log.Printf("Failed to follow logs for %s: %v", containerName, err)
+        slog.Error("failed to follow logs", "container", containerName, "error", err)
         return
     }
 
@@ -128,7 +129,7 @@ func (c *LogCollector) attachToContainer(parentCtx context.Context, containerID,
                 Message   string `json:"message"`
             }
             if err := json.Unmarshal([]byte(logJSON), &entry); err != nil {
-                log.Printf("Invalid log message: %v", err)
+                slog.Warn("invalid log message", "error", err)
                 continue
             }
             // Create LogEntry model and send to batch channel
@@ -149,14 +150,14 @@ func (c *LogCollector) attachToContainer(parentCtx context.Context, containerID,
         c.mu.Lock()
         delete(c.cancelFuncs, containerID)
         c.mu.Unlock()
-        log.Printf("Log stream ended for container %s", containerName)
+        slog.Info("log stream ended", "container", containerName)
     }()
 }
 
 func (c *LogCollector) attachToAllRunning(ctx context.Context) {
     containers, err := c.dockerService.GetAllRunningContainers(ctx)
     if err != nil {
-        log.Printf("Failed to list containers: %v", err)
+        slog.Error("failed to list containers", "error", err)
         return
     }
     for _, container := range containers {
@@ -167,12 +168,13 @@ func (c *LogCollector) attachToAllRunning(ctx context.Context) {
 func (c *LogCollector) watchEvents(ctx context.Context) {
     cli, err := docker.GetClient()
     if err != nil {
-        log.Fatalf("Cannot create Docker client: %v", err)
+        slog.Error("cannot create Docker client", "error", err)
+        return
     }
 
     result := cli.Events(ctx, client.EventsListOptions{})
     if err != nil {
-        log.Printf("Failed to get events: %v", err)
+        slog.Error("failed to get events", "error", err)
         return
     }
 
@@ -194,20 +196,51 @@ func (c *LogCollector) watchEvents(ctx context.Context) {
                         }
                     }
                     if name != "" {
-                        log.Printf("Detected new container: %s (%s)", name, containerID)
+                        slog.Info("detected new container", "container", name, "container_id", containerID)
                         c.attachToContainer(ctx, containerID, name)
                     }
                 }
             }
         case err := <-result.Err:
             if err != nil {
-                log.Printf("Event error: %v", err)
+                slog.Error("event error", "error", err)
                 // optionally break and restart
                 return
             }
         case <-ctx.Done():
             return
         }
+    }
+}
+
+// retentionLoop periodically purges log entries older than the retention period
+// from the Postgres log_entries table to keep disk usage under control.
+func (c *LogCollector) retentionLoop(ctx context.Context) {
+    const retentionPeriod = 7 * 24 * time.Hour // 7 days
+    ticker := time.NewTicker(1 * time.Hour)
+    defer ticker.Stop()
+
+    // Run once at startup
+    c.runRetention(retentionPeriod)
+
+    for {
+        select {
+        case <-ticker.C:
+            c.runRetention(retentionPeriod)
+        case <-ctx.Done():
+            slog.Info("retention loop stopped")
+            return
+        }
+    }
+}
+
+func (c *LogCollector) runRetention(retentionPeriod time.Duration) {
+    cutoff := time.Now().Add(-retentionPeriod)
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    if _, err := c.logRepo.DeleteLogsBefore(ctx, cutoff); err != nil {
+        slog.Error("log retention cleanup failed", "error", err)
     }
 }
 

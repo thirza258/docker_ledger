@@ -2,7 +2,7 @@ package telemetry
 
 import (
     "context"
-    "log"
+    "log/slog"
     "os"
 
     "go.opentelemetry.io/otel"
@@ -24,7 +24,7 @@ func InitTracer() func(context.Context) error {
         collectorURL = "otel-collector:4317" // Default for local setup
     }
 
-    log.Printf("Initializing tracer with service: %s, collector: %s", serviceName, collectorURL)
+    slog.Info("initializing tracer", "service", serviceName, "collector", collectorURL)
 
     // Configure a new OTLP exporter using gRPC
     ctx := context.Background()
@@ -33,7 +33,8 @@ func InitTracer() func(context.Context) error {
         otlptracegrpc.WithEndpoint(collectorURL),
     )
     if err != nil {
-        log.Fatalf("Failed to create OTLP trace exporter: %v", err)
+        Logger.Error("failed to create OTLP trace exporter", "error", err)
+        os.Exit(1)
     }
 
     // Define resource attributes that describe your service
@@ -44,7 +45,8 @@ func InitTracer() func(context.Context) error {
         ),
     )
     if err != nil {
-        log.Fatalf("Failed to create resource: %v", err)
+        Logger.Error("failed to create resource", "error", err)
+        os.Exit(1)
     }
 
     // Create a new tracer provider with a batch span processor

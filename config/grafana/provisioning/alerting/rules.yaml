@@ -1,0 +1,118 @@
+# Grafana Alert Rules — provisioned via file
+# See: https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: dockerledger-logs
+    folder: DockerLedger
+    interval: 1m
+    rules:
+      # ── Error rate spike ──────────────────────────────────────────
+      - uid: dl-error-rate-spike
+        title: "DockerLedger — Error Rate Spike"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: loki
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              editorMode: code
+              expr: 'sum(rate({container_id=~".+"} [5m]))'
+              legendFormat: "Error rate"
+              queryType: range
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              conditions:
+                - evaluator:
+                    params: [5]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              expression: A
+              refId: C
+              type: classic_conditions
+        noDataState: NoData
+        execErrState: Error
+        for: 5m
+        annotations:
+          __dashboardUid__: dockerledger-logs
+          __panelId__: "6"
+          description: |
+            Error rate across all containers exceeded 5 lines/sec
+            for more than 5 minutes.
+
+            Current value: {{ $values.A.Value }} errors/sec
+
+            Dashboard: [DockerLedger Logs](/d/dockerledger-logs)
+          summary: "Error rate spike — {{ $values.A.Value }} errors/sec"
+          runbook_url: "https://github.com/thirzq/dockerledger"
+        labels:
+          severity: warning
+          datasource: loki
+
+      # ── No log ingestion (dead pipeline) ──────────────────────────
+      - uid: dl-no-logs
+        title: "DockerLedger — No Logs Ingested"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: loki
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              expr: 'sum(count_over_time({container_id=~".+"} [10m]))'
+              queryType: instant
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              expression: A
+              refId: C
+              type: classic_conditions
+        noDataState: NoData
+        execErrState: Error
+        for: 10m
+        annotations:
+          __dashboardUid__: dockerledger-logs
+          __panelId__: "1"
+          description: |
+            No log lines ingested from any container in the last
+            10 minutes. This usually means the collector pipeline
+            is down or Docker logs are not being written.
+
+            Dashboard: [DockerLedger Logs](/d/dockerledger-logs)
+          summary: "No logs ingested for 10+ minutes"
+        labels:
+          severity: critical
+          datasource: loki

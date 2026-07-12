@@ -1,6 +1,7 @@
 package wakeproxy
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -24,18 +25,21 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	svc, err := h.manager.GetServiceForHost(host)
 	if err != nil {
+		slog.Warn("wakeproxy: unknown service host", "host", host, "error", err)
 		http.Error(w, "unknown service", http.StatusNotFound)
 		return
 	}
 
 	// Check activation
 	if !svc.IsActive() {
+		slog.Info("wakeproxy: service deactivated", "service", svc.Config.Name, "host", host)
 		http.Error(w, "service deactivated", http.StatusServiceUnavailable)
 		return
 	}
 
 	// Await container start (may start it)
 	if err := svc.AwaitReady(r.Context()); err != nil {
+		slog.Error("wakeproxy: failed to start service", "service", svc.Config.Name, "host", host, "error", err)
 		http.Error(w, "service starting or unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -61,6 +65,7 @@ func (h *ProxyHandler) getProxy(svc *ManagedService) *httputil.ReverseProxy {
 	target := svc.TargetURL()
 	if target == nil {
 		// fallback (should not happen)
+		slog.Error("wakeproxy: nil target URL for service", "service", svc.Config.Name)
 		target, _ = url.Parse("http://127.0.0.1:1")
 	}
 	proxy = httputil.NewSingleHostReverseProxy(target)

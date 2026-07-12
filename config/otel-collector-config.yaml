@@ -1,0 +1,123 @@
+receivers:
+  # OTLP receiver for the existing tracing setup in telemetry.go
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Scrape Docker JSON log files from the host
+  filelog:
+    include:
+      - /var/lib/docker/containers/*/*-json.log
+    start_at: end
+    include_file_path: true
+    include_file_name: false
+    operators:
+      # Parse the Docker JSON log format:
+      # {"log":"message\n","stream":"stdout","time":"2026-07-12T..."}
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: "%Y-%m-%dT%H:%M:%S.%fZ"
+
+      # Extract container_id from log file path
+      # Path: /var/lib/docker/containers/<64-hex-id>/<64-hex-id>-json.log
+      - type: regex_parser
+        regex: '/containers/(?P<container_id>[a-f0-9]{64})/'
+        parse_from: attributes["log.file.path"]
+
+      # Move the actual log message from attributes.log to body
+      - type: move
+        from: attributes.log
+        to: body
+
+      # Set severity from stream: stdout → INFO, stderr → ERROR
+      - type: add
+        field: attributes.level
+        value: INFO
+        if: 'attributes.stream == "stdout"'
+      - type: add
+        field: attributes.level
+        value: ERROR
+        if: 'attributes.stream == "stderr"'
+
+      # Clean up unnecessary attributes to reduce label cardinality
+      - type: remove
+        field: attributes.time
+      - type: remove
+        field: attributes.stream
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+  # Add resource attributes so Loki has labels to work with
+  resource:
+    attributes:
+      - key: service.name
+        value: dockerledger
+        action: upsert
+      - key: deployment.environment
+        value: dev
+        action: upsert
+
+  # Transform: attempt to parse JSON body for structured backend logs
+  # If the body is valid JSON, promote level/service/request_id fields to attributes.
+  transform:
+    log_statements:
+      - context: log
+        statements:
+          # Try to parse body as JSON; if successful, extract level and overwrite
+          # the stream-based default, plus promote request_id for correlation.
+          - set(attributes["_body_json"], ParseJSON(body)) where IsMatch(body, "^\\s*\\{")
+          - set(attributes["level"], attributes["_body_json"]["level"]) where attributes["_body_json"] != nil
+          - set(attributes["service_name"], attributes["_body_json"]["service"]) where attributes["_body_json"] != nil and attributes["_body_json"]["service"] != nil
+          - set(attributes["request_id"], attributes["_body_json"]["request_id"]) where attributes["_body_json"] != nil and attributes["_body_json"]["request_id"] != nil
+
+  # Drop noisy / low-value lines (P5 noise filtering)
+  filter:
+    logs:
+      exclude:
+        match_type: regexp
+        record_attributes:
+          # Docker / app health-check probes
+          - key: body
+            value: 'GET /health/docker'
+          - key: body
+            value: '/health/docker'
+          # GORM record-not-found (double-filtered; also handled in app)
+          - key: body
+            value: 'record not found'
+          # GORM slow-query trace noise at DEBUG level
+          - key: body
+            value: '"msg":"gorm query"'
+          # Docker health-check exec probes
+          - key: body
+            value: 'healthcheck:'
+
+exporters:
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    # Map known attributes to Loki labels (low cardinality)
+    labels:
+      attributes:
+        container_id: ""
+        level: ""
+        service_name: ""
+
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [resource, transform, filter, batch]
+      exporters: [loki, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

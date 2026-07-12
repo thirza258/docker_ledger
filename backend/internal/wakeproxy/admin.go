@@ -2,6 +2,7 @@ package wakeproxy
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -51,11 +52,13 @@ func (a *AdminServer) listServices(w http.ResponseWriter, r *http.Request) {
 func (a *AdminServer) createService(w http.ResponseWriter, r *http.Request) {
 	var cfg ServiceConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		slog.Warn("wakeproxy admin: invalid JSON for createService", "error", err)
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if err := a.manager.AddService(cfg); err != nil {
+		slog.Error("wakeproxy admin: failed to create service", "error", err)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -72,10 +75,12 @@ func (a *AdminServer) activate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	svc, ok := a.manager.services[name]
 	if !ok {
+		slog.Warn("wakeproxy admin: service not found for activation", "name", name)
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
 	svc.SetActive(true)
+	slog.Info("wakeproxy admin: service activated", "name", name)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "activated"})
 }
@@ -84,10 +89,12 @@ func (a *AdminServer) deactivate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	svc, ok := a.manager.services[name]
 	if !ok {
+		slog.Warn("wakeproxy admin: service not found for deactivation", "name", name)
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
 	svc.SetActive(false)
+	slog.Info("wakeproxy admin: service deactivated", "name", name)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "deactivated"})
 }
