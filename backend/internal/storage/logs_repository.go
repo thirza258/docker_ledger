@@ -22,8 +22,9 @@ func (r *LogRepository) InsertLog(ctx context.Context, containerID, message, str
         ContainerID: containerID,
         Message:     message,
         Stream:      stream,
-        
-        // Timestamp will be set by GORM's default: now()
+        // timestamp is NOT NULL with no DB default, so it has to be set here;
+        // leaving it zero writes year 1 and breaks every time-range query.
+        Timestamp: time.Now(),
     }
     return r.db.WithContext(ctx).Create(&logEntry).Error
 }
@@ -49,25 +50,29 @@ func (r *LogRepository) SearchLogs(ctx context.Context, query, containerName str
     var logs []models.LogEntry
     db := r.db.WithContext(ctx)
 
+    // The table backing models.LogEntry is log_entries — there is no "logs"
+    // table, so every column reference has to be qualified with log_entries.
     searchPattern := "%" + query + "%"
-    db = db.Joins("JOIN containers ON containers.id = logs.container_id").
-        Where("logs.message ILIKE ?", searchPattern)
+    db = db.Table("log_entries").
+        Joins("JOIN containers ON containers.id = log_entries.container_id").
+        Select("log_entries.*, containers.name as container_name").
+        Where("log_entries.message ILIKE ?", searchPattern)
 
     if containerName != "" {
         db = db.Where("containers.name = ?", containerName)
     }
     if fromTime != nil {
-        db = db.Where("logs.timestamp >= ?", *fromTime)
+        db = db.Where("log_entries.timestamp >= ?", *fromTime)
     }
     if toTime != nil {
-        db = db.Where("logs.timestamp <= ?", *toTime)
+        db = db.Where("log_entries.timestamp <= ?", *toTime)
     }
 
     if limit <= 0 || limit > 1000 {
         limit = 100
     }
 
-    err := db.Order("logs.timestamp DESC").Limit(limit).Find(&logs).Error
+    err := db.Order("log_entries.timestamp DESC").Limit(limit).Find(&logs).Error
     return logs, err
 }
 
@@ -104,6 +109,12 @@ func (r *LogRepository) GetLogsByContainerSince(
         Order("timestamp DESC").
         Limit(limit).
         Find(&logs).Error
+
+    // No join here, so fill the name in from the container we just looked up —
+    // callers (the AI prompt builder) render it on every line.
+    for i := range logs {
+        logs[i].ContainerName = container.Name
+    }
 
     return logs, err
 }

@@ -25,6 +25,7 @@ type LogCollector struct {
     mu             sync.RWMutex
     batchCh        chan models.LogEntry
     batchDone      chan struct{}
+    batchDoneOnce  sync.Once
 }
 
 func NewLogCollector(
@@ -56,7 +57,20 @@ func (c *LogCollector) batchWriter(ctx context.Context) {
     defer ticker.Stop()
     batch := make([]models.LogEntry, 0, 1000)
 
-    flush := func() {
+    insert := func(entries []models.LogEntry) {
+        ctxTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+        if err := c.logRepo.BatchInsertLogs(ctxTimeout, entries); err != nil {
+            slog.Error("batch insert failed", "error", err)
+            // Optionally, you could re-queue them, but for simplicity we drop.
+        }
+    }
+
+    // flush hands the batch to the DB. During normal operation the insert runs
+    // in the background so the writer keeps draining batchCh; on the shutdown
+    // path it must run synchronously, or the process exits before the final
+    // batch is written.
+    flush := func(sync bool) {
         if len(batch) == 0 {
             return
         }
@@ -66,15 +80,11 @@ func (c *LogCollector) batchWriter(ctx context.Context) {
         // Clear batch immediately
         batch = batch[:0]
 
-        // Insert in background with short timeout
-        go func(entries []models.LogEntry) {
-            ctxTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-            defer cancel()
-            if err := c.logRepo.BatchInsertLogs(ctxTimeout, entries); err != nil {
-                slog.Error("batch insert failed", "error", err)
-                // Optionally, you could re-queue them, but for simplicity we drop.
-            }
-        }(toInsert)
+        if sync {
+            insert(toInsert)
+            return
+        }
+        go insert(toInsert)
     }
 
     for {
@@ -82,24 +92,43 @@ func (c *LogCollector) batchWriter(ctx context.Context) {
         case entry, ok := <-c.batchCh:
             if !ok {
                 // Channel closed - flush remaining and exit
-                flush()
-                close(c.batchDone)
+                flush(true)
+                c.signalDone()
                 return
             }
             batch = append(batch, entry)
             if len(batch) >= 1000 {
-                flush()
+                flush(false)
                 ticker.Reset(5 * time.Second)
             }
         case <-ticker.C:
-            flush()
+            flush(false)
         case <-ctx.Done():
-            // Context cancelled - flush remaining and exit
-            flush()
-            close(c.batchDone)
+            // Context cancelled. Drain whatever the per-container followers
+            // already queued before giving up on the rest, then exit.
+            drain:
+            for {
+                select {
+                case entry := <-c.batchCh:
+                    batch = append(batch, entry)
+                    if len(batch) >= 1000 {
+                        flush(true)
+                    }
+                default:
+                    break drain
+                }
+            }
+            flush(true)
+            c.signalDone()
             return
         }
     }
+}
+
+// signalDone closes batchDone exactly once; batchWriter can reach its exit path
+// from either the closed-channel branch or ctx.Done, and closing twice panics.
+func (c *LogCollector) signalDone() {
+    c.batchDoneOnce.Do(func() { close(c.batchDone) })
 }
 
 // attachToContainer now sends logs to batchCh.
@@ -251,8 +280,14 @@ func containerNameFromEvent(event events.Message) string {
     return ""
 }
 
+// Shutdown waits for the batch writer to flush what it has buffered.
+//
+// It deliberately does NOT close batchCh: the per-container follower goroutines
+// are still selecting on `c.batchCh <- entry`, and Go picks a ready select case
+// at random, so closing the channel underneath them panics with "send on closed
+// channel". The writer stops on the same context cancellation that stops the
+// followers.
 func (c *LogCollector) Shutdown(ctx context.Context) error {
-    close(c.batchCh) // signal batch writer to stop
     select {
     case <-c.batchDone:
         return nil

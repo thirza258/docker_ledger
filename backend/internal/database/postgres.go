@@ -9,6 +9,7 @@ import (
     "gorm.io/driver/postgres"
     "gorm.io/gorm"
     gormlogger "gorm.io/gorm/logger"
+    "gorm.io/plugin/opentelemetry/tracing"
 
     "github.com/thirzq/dockerledger/internal/config"
     "github.com/thirzq/dockerledger/internal/models"
@@ -35,6 +36,12 @@ func NewGormConnection(cfg *config.Config) (*gorm.DB, error) {
     sqlDB.SetMaxOpenConns(25)
     sqlDB.SetMaxIdleConns(10)
     sqlDB.SetConnMaxLifetime(5 * time.Minute)
+
+    // Emit a span per SQL statement, as a child of the HTTP server span.
+    // Metrics are left off: this stack has no metrics pipeline yet.
+    if err := db.Use(tracing.NewPlugin(tracing.WithoutMetrics())); err != nil {
+        return nil, fmt.Errorf("failed to install gorm tracing plugin: %w", err)
+    }
 
     if err := db.AutoMigrate(&models.Container{}, &models.LogEntry{}, &models.WakeProxyState{}); err != nil {
         return nil, fmt.Errorf("auto‑migration failed: %w", err)

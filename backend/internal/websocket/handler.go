@@ -70,7 +70,7 @@ func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stream, err := h.service.StreamContainerLogs(r.Context(), containerID, tail)
 	if err != nil {
 		log.Error("ws stream not found", "container_id", containerID, "error", err)
-		conn.WriteMessage(websocket.CloseMessage, []byte("Container not found or error"))
+		writeClose(conn, websocket.CloseInternalServerErr, "Container not found or error")
 		return
 	}
 	defer stream.Close()
@@ -88,15 +88,31 @@ func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Any read error terminates the stream. Looping here (the previous
+		// behaviour) spun forever on EOF, holding the Docker stream and the
+		// goroutine open and writing two log lines a second per connection.
 		if err != nil {
 			if err == io.EOF {
-				conn.WriteMessage(websocket.CloseMessage, []byte("Log stream ended"))
+				log.Info("ws stream ended", "container_id", containerID)
+				writeClose(conn, websocket.CloseNormalClosure, "Log stream ended")
+			} else {
+				log.Warn("ws stream error", "container_id", containerID, "error", err)
+				writeClose(conn, websocket.CloseInternalServerErr, "Log stream error")
 			}
-			log.Warn("ws stream error", "error", err)
-			time.Sleep(500 * time.Millisecond)
-			continue
+			return
 		}
 	}
+}
+
+// writeClose sends a well-formed close frame. A CloseMessage whose payload is
+// raw text is not a valid close frame — the first two bytes must be the status
+// code — and browsers drop it.
+func writeClose(conn *websocket.Conn, code int, reason string) {
+	_ = conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason),
+		time.Now().Add(time.Second),
+	)
 }
 
 func decodeLogChunk(data []byte) string {

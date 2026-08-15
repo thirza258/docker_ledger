@@ -80,10 +80,33 @@ The Compose file starts:
 - `postgres` on port `5432`
 - `backend` on port `8080`
 - `frontend` on port `3000`
+- `otel-collector` - internal only, receives traces and scrapes container logs
+- `loki` - internal only, stores logs
+- `grafana` on `127.0.0.1:3030`
 
 The backend container mounts `/var/run/docker.sock` so it can inspect containers, collect logs, and support WakeProxy-managed services when enabled.
 
-If you want tracing to work, make sure the collector config mounted by Compose exists at the path referenced in `docker-compose.yml`.
+## Observability
+
+The stack ships with an OpenTelemetry pipeline alongside the Postgres log store. The two are independent: the Postgres collector still feeds live streaming, search, and AI summaries.
+
+**Traces.** The backend exports OTLP/gRPC spans to `otel-collector:4317`. Instrumented out of the box:
+
+- Inbound HTTP requests (`otelhttp`), excluding health probes and WebSocket streams
+- Every SQL statement (`gorm.io/plugin/opentelemetry`), as a child of the request span
+- Outbound Docker API calls
+
+Tracing degrades gracefully: if the collector is unreachable the API still serves, and spans are dropped.
+
+**Logs.** The collector tails Docker's JSON log files, parses the backend's structured output, and pushes to Loki with `container_id`, `level`, and `service_name` as labels. Grafana is pre-provisioned with the Loki datasource, a starter dashboard, and error-rate alert rules.
+
+**Correlation.** Every backend log line emitted inside a request carries `request_id`, `trace_id`, and `span_id`, so one request can be followed across log lines and matched to its trace:
+
+```logql
+{service_name="dockerledger-backend"} | json | request_id="abc123"
+```
+
+Point `OTEL_EXPORTER_OTLP_ENDPOINT` at a tracing backend (Tempo, Jaeger) — or add one as a collector exporter — to view traces; the collector currently logs trace batches rather than storing them.
 
 ## Environment Variables
 
@@ -100,6 +123,15 @@ If you want tracing to work, make sure the collector config mounted by Compose e
 
 - `SERVER_PORT` - backend HTTP port, default `8080`
 - `DOCKER_HOST` - Docker daemon endpoint, default `unix:///var/run/docker.sock`
+- `LOG_LEVEL` - `debug`, `info`, `warn`, or `error`, default `info`
+
+### Observability
+
+- `OTEL_SERVICE_NAME` - service name on spans and logs, default `dockerledger-backend`
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - collector endpoint, default `otel-collector:4317`
+- `ENV` - environment attribute on spans, default `dev`
+- `GRAFANA_PORT` - host port for Grafana, default `3030`
+- `GRAFANA_USER` / `GRAFANA_PASSWORD` - Grafana admin credentials, default `admin`/`admin`
 
 ### AI Summary
 

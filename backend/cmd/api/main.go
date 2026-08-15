@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/thirzq/dockerledger/internal/collector"
 	"github.com/thirzq/dockerledger/internal/config"
 	"github.com/thirzq/dockerledger/internal/database"
@@ -23,6 +25,17 @@ import (
 	"github.com/thirzq/dockerledger/internal/websocket"
 )
 
+// traceableRequest reports whether a request should produce a server span.
+// Health probes and hijacked WebSocket streams are excluded: the former are
+// pure noise, the latter would each hold a span open for the life of the
+// connection.
+func traceableRequest(r *http.Request) bool {
+	if r.URL.Path == "/health/docker" {
+		return false
+	}
+	return !strings.HasSuffix(r.URL.Path, "/logs/live")
+}
+
 func main() {
 	if _, err := docker.GetClient(); err != nil {
 		slog.Error("failed to initialize Docker client", "error", err)
@@ -30,6 +43,14 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	// OpenTelemetry tracing. A failure here must not stop the API from
+	// serving, so we log and continue with the no-op global provider.
+	shutdownTracer, err := telemetry.InitTracer(context.Background())
+	if err != nil {
+		slog.Error("tracing disabled: failed to initialize tracer", "error", err)
+		shutdownTracer = func(context.Context) error { return nil }
+	}
 
 	var proxyServer *http.Server
 	if cfg.Wakeproxy != nil && cfg.Wakeproxy.ListenAddr != "" {
@@ -127,12 +148,26 @@ func main() {
 	defer stop()
 	go logCollector.Start(ctx)
 
-	// Start main API server
+	// Start main API server.
+	//
+	// Deliberately no ReadTimeout/WriteTimeout: this server serves hijacked
+	// WebSocket log streams, and the deadlines set before Hijack() stay on the
+	// connection, killing every live tail after WriteTimeout. Long-running
+	// handlers (AI summaries) bound themselves with a context timeout instead.
+	// ReadHeaderTimeout still protects against slowloris.
+	var apiHandler http.Handler = middleware.RequestID(middleware.AccessLog(http.DefaultServeMux))
+	apiHandler = otelhttp.NewHandler(apiHandler, "dockerledger-api",
+		otelhttp.WithFilter(traceableRequest),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}),
+	)
+
 	server := &http.Server{
-		Addr:         "0.0.0.0:" + cfg.ServerPort,
-		Handler:      middleware.RequestID(middleware.AccessLog(http.DefaultServeMux)),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Addr:              "0.0.0.0:" + cfg.ServerPort,
+		Handler:           apiHandler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
@@ -160,10 +195,12 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
+		// Don't exit here: the log collector still has buffered entries to
+		// flush and the tracer has spans to export.
 		slog.Error("server forced shutdown", "error", err)
-		os.Exit(1)
+	} else {
+		slog.Info("server exited properly")
 	}
-	slog.Info("server exited properly")
 
 	// 3. Shutdown log collector
 	collectorShutdownCtx, collectorCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -175,6 +212,13 @@ func main() {
 	// 4. Close Docker client
 	if err := docker.Close(); err != nil {
 		slog.Error("error closing Docker client", "error", err)
+	}
+
+	// 5. Flush any buffered spans
+	tracerShutdownCtx, tracerCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer tracerCancel()
+	if err := shutdownTracer(tracerShutdownCtx); err != nil {
+		slog.Error("tracer shutdown error", "error", err)
 	}
 
 	slog.Info("shutdown complete")

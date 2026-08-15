@@ -1,13 +1,21 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/thirzq/dockerledger/internal/services"
 	"github.com/thirzq/dockerledger/internal/telemetry"
 )
+
+// summaryTimeout bounds a summary request end to end. The server itself has no
+// WriteTimeout (it also serves hijacked WebSocket streams), so slow paths carry
+// their own deadline. It sits above the 30s OpenRouter client timeout so the
+// upstream error surfaces instead of a bare cancellation.
+const summaryTimeout = 45 * time.Second
 
 type AISummaryHandler struct {
 	aiService *services.AISummaryService
@@ -26,7 +34,10 @@ func (h *AISummaryHandler) GenerateSummary(w http.ResponseWriter, r *http.Reques
 		Limit:     limit,
 	}
 
-	summary, err := h.aiService.GenerateSummary(r.Context(), req)
+	ctx, cancel := context.WithTimeout(r.Context(), summaryTimeout)
+	defer cancel()
+
+	summary, err := h.aiService.GenerateSummary(ctx, req)
 	if err != nil {
 		telemetry.WithRequestID(r.Context()).Error("failed to generate AI summary", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -52,7 +63,10 @@ func (h *AISummaryHandler) GenerateContainerSummary(w http.ResponseWriter, r *ht
 		Limit:     limit,
 	}
 
-	summary, err := h.aiService.GenerateContainerSummary(r.Context(), containerName, req)
+	ctx, cancel := context.WithTimeout(r.Context(), summaryTimeout)
+	defer cancel()
+
+	summary, err := h.aiService.GenerateContainerSummary(ctx, containerName, req)
 	if err != nil {
 		telemetry.WithRequestID(r.Context()).Error("failed to generate container AI summary", "container_name", containerName, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

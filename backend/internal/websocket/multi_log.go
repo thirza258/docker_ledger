@@ -23,8 +23,9 @@ func (h *MultiLogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		// Upgrade already wrote an HTTP error response; writing another one
+		// here only produces a "superfluous WriteHeader" warning.
 		log.Error("ws multi-log upgrade failed", "error", err)
-		http.Error(w, "WebSocket upgrade failed", http.StatusInternalServerError)
 		return
 	}
 	defer conn.Close()
@@ -36,7 +37,7 @@ func (h *MultiLogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	containers, err := h.service.GetAllRunningContainers(ctx)
 	if err != nil {
 		log.Error("ws multi-log failed to list containers", "error", err)
-		conn.WriteMessage(websocket.CloseMessage, []byte("Failed to list containers: "+err.Error()))
+		writeClose(conn, websocket.CloseInternalServerErr, "Failed to list containers")
 		return
 	}
 	log.Info("ws multi-log connected", "containers", len(containers))

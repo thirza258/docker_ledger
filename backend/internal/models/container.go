@@ -33,6 +33,9 @@ type LogEntry struct {
     ContainerID string    `gorm:"not null;index;size:64;constraint:OnDelete:CASCADE" json:"container_id"`
     Message     string    `gorm:"not null;type:text" json:"message"`
     Timestamp   time.Time `gorm:"not null;index" json:"timestamp"`
-    ContainerName string `gorm:"-" json:"container_name"`
+    // Populated by joins that select containers.name AS container_name.
+    // "->" makes it read-only (never written back), "-:migration" keeps
+    // AutoMigrate from creating a real column for it.
+    ContainerName string `gorm:"->;-:migration" json:"container_name"`
     Stream      string    `gorm:"size:10;check:stream IN ('stdout','stderr')" json:"stream"`
 }

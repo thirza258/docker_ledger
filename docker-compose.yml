@@ -34,6 +34,11 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-your_api_key_here}
       SERVER_PORT: "8080"
       DOCKER_HOST: unix:///var/run/docker.sock
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # OpenTelemetry
+      OTEL_SERVICE_NAME: dockerledger-backend
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      ENV: ${ENV:-dev}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:
@@ -41,6 +46,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
     networks:
       - dockerledger

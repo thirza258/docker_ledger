@@ -20,7 +20,11 @@ receivers:
       - type: json_parser
         timestamp:
           parse_from: attributes.time
-          layout: "%Y-%m-%dT%H:%M:%S.%fZ"
+          # Docker writes RFC3339 with nanosecond precision; the Go layout
+          # parses it exactly, where strptime's %f is fixed-width and fails on
+          # the variable-length fraction Docker emits.
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
 
       # Extract container_id from log file path
       # Path: /var/lib/docker/containers/<64-hex-id>/<64-hex-id>-json.log
@@ -76,37 +80,40 @@ processors:
           - set(attributes["level"], attributes["_body_json"]["level"]) where attributes["_body_json"] != nil
           - set(attributes["service_name"], attributes["_body_json"]["service"]) where attributes["_body_json"] != nil and attributes["_body_json"]["service"] != nil
           - set(attributes["request_id"], attributes["_body_json"]["request_id"]) where attributes["_body_json"] != nil and attributes["_body_json"]["request_id"] != nil
+          # Trace correlation: the backend stamps these on every log line that
+          # is emitted inside a span.
+          - set(attributes["trace_id"], attributes["_body_json"]["trace_id"]) where attributes["_body_json"] != nil and attributes["_body_json"]["trace_id"] != nil
+          - set(attributes["span_id"], attributes["_body_json"]["span_id"]) where attributes["_body_json"] != nil and attributes["_body_json"]["span_id"] != nil
+          # Drop the scratch copy so the parsed map isn't shipped alongside the body.
+          - delete_key(attributes, "_body_json")
+          # Tell the loki exporter which record attributes to promote to Loki
+          # labels. This hint replaces the exporter's removed `labels:` block;
+          # keep the list short — every label is an index dimension.
+          - set(attributes["loki.attribute.labels"], "container_id, level, service_name")
 
-  # Drop noisy / low-value lines (P5 noise filtering)
+  # Drop noisy / low-value lines (P5 noise filtering).
+  # These conditions match on the record body, which is NOT an attribute — the
+  # previous `record_attributes` form with `key: body` matched nothing and let
+  # all of this noise through to Loki.
   filter:
+    error_mode: ignore
     logs:
-      exclude:
-        match_type: regexp
-        record_attributes:
-          # Docker / app health-check probes
-          - key: body
-            value: 'GET /health/docker'
-          - key: body
-            value: '/health/docker'
-          # GORM record-not-found (double-filtered; also handled in app)
-          - key: body
-            value: 'record not found'
-          # GORM slow-query trace noise at DEBUG level
-          - key: body
-            value: '"msg":"gorm query"'
-          # Docker health-check exec probes
-          - key: body
-            value: 'healthcheck:'
+      log_record:
+        # Docker / app health-check probes
+        - 'IsMatch(body, "/health/docker")'
+        # GORM record-not-found (double-filtered; also handled in app)
+        - 'IsMatch(body, "record not found")'
+        # GORM slow-query trace noise at DEBUG level
+        - 'IsMatch(body, "\"msg\":\"gorm query\"")'
+        # Docker health-check exec probes
+        - 'IsMatch(body, "healthcheck:")'
 
 exporters:
   loki:
     endpoint: http://loki:3100/loki/api/v1/push
-    # Map known attributes to Loki labels (low cardinality)
-    labels:
-      attributes:
-        container_id: ""
-        level: ""
-        service_name: ""
+    # Labels are selected with the `loki.attribute.labels` hint set in the
+    # transform processor above — this exporter no longer accepts a `labels`
+    # block, and configuring one makes the collector refuse to start.
 
   debug:
     verbosity: basic
@@ -114,9 +121,12 @@ exporters:
 service:
   pipelines:
     logs:
+      # No debug exporter here on purpose: the collector's own stdout is one of
+      # the files filelog scrapes, so echoing every log record to stdout feeds
+      # it straight back into the pipeline.
       receivers: [filelog]
       processors: [resource, transform, filter, batch]
-      exporters: [loki, debug]
+      exporters: [loki]
     traces:
       receivers: [otlp]
       processors: [batch]
