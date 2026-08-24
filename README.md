@@ -123,7 +123,12 @@ Point `OTEL_EXPORTER_OTLP_ENDPOINT` at a tracing backend (Tempo, Jaeger) — or 
 
 - `SERVER_PORT` - backend HTTP port, default `8080`
 - `DOCKER_HOST` - Docker daemon endpoint, default `unix:///var/run/docker.sock`
-- `LOG_LEVEL` - `debug`, `info`, `warn`, or `error`, default `info`
+- `LOG_LEVEL` - `debug`, `info`, `warn`, or `error`, default `info`. Read again
+  after `.env` is loaded, so setting it there works.
+- `LOG_FORMAT` - `json` (default) or `text`. Keep `json` under Compose: the OTel
+  collector parses each stdout line as JSON to promote `level`, `service` and
+  the correlation ids into Loki labels. `text` is for reading logs in a
+  terminal during local development.
 
 ### Observability
 

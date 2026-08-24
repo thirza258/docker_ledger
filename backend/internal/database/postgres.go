@@ -4,6 +4,7 @@ import (
     "context"
     "errors"
     "fmt"
+    "strings"
     "time"
 
     "gorm.io/driver/postgres"
@@ -15,6 +16,11 @@ import (
     "github.com/thirzq/dockerledger/internal/models"
     "github.com/thirzq/dockerledger/internal/telemetry"
 )
+
+// slowQueryThreshold is how long a statement may take before its trace line is
+// promoted from debug to warn. Slow queries are the ones worth seeing without
+// turning on debug logging for every statement the service runs.
+const slowQueryThreshold = 200 * time.Millisecond
 
 // NewGormConnection creates a GORM DB connection using the shared config.
 func NewGormConnection(cfg *config.Config) (*gorm.DB, error) {
@@ -55,44 +61,76 @@ func NewGormConnection(cfg *config.Config) (*gorm.DB, error) {
 type slogGormLogger struct{}
 
 func (l *slogGormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
-    return l // same behaviour at all levels
+    return l // the threshold is handled by slog via LOG_LEVEL
+}
+
+// gormMessage renders one of GORM's log messages.
+//
+// GORM's logger interface is printf-shaped: msg is a format string and data
+// holds its arguments. Rendering it with fmt.Sprint instead ignored the verbs
+// and inserted no separator between operands, so messages came out mangled
+// ("migrating tablecontainers"). Messages also carry a trailing newline, which
+// has no place in a structured log line.
+func gormMessage(msg string, data []interface{}) string {
+    switch {
+    case len(data) == 0:
+        // Nothing to interpolate.
+    case strings.ContainsRune(msg, '%'):
+        msg = fmt.Sprintf(msg, data...)
+    default:
+        // No verbs to fill, so append the values rather than dropping them.
+        parts := make([]string, 0, len(data)+1)
+        parts = append(parts, msg)
+        for _, d := range data {
+            parts = append(parts, fmt.Sprint(d))
+        }
+        msg = strings.Join(parts, " ")
+    }
+    return strings.TrimSpace(msg)
 }
 
 func (l *slogGormLogger) Info(ctx context.Context, msg string, data ...interface{}) {
-    telemetry.WithRequestID(ctx).Info("gorm: "+fmt.Sprint(append([]interface{}{msg}, data...)...))
+    telemetry.WithRequestID(ctx).Info(gormMessage(msg, data), "component", "gorm")
 }
 
 func (l *slogGormLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
-    telemetry.WithRequestID(ctx).Warn("gorm: "+fmt.Sprint(append([]interface{}{msg}, data...)...))
+    telemetry.WithRequestID(ctx).Warn(gormMessage(msg, data), "component", "gorm")
 }
 
 func (l *slogGormLogger) Error(ctx context.Context, msg string, data ...interface{}) {
     // Suppress record-not-found errors — they are benign and expected
     // in first-time lookups within the repository layer.
-    if errors.Is(gorm.ErrRecordNotFound, errFromData(data)) {
+    if errors.Is(errFromData(data), gorm.ErrRecordNotFound) {
         return
     }
-    telemetry.WithRequestID(ctx).Info("gorm: "+fmt.Sprint(append([]interface{}{msg}, data...)...))
+    telemetry.WithRequestID(ctx).Error(gormMessage(msg, data), "component", "gorm")
 }
 
 func (l *slogGormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
     elapsed := time.Since(begin)
     sql, rows := fc()
-    attrs := []any{"latency_ms", elapsed.Milliseconds(), "rows", rows, "sql", sql}
-    if err != nil {
-        // Suppress record-not-found — expected in repository first-time lookups.
-        if errors.Is(err, gorm.ErrRecordNotFound) {
-            telemetry.WithRequestID(ctx).Debug("gorm query", append(attrs, "error", err)...)
-            return
-        }
-        attrs = append(attrs, "error", err)
-        telemetry.WithRequestID(ctx).Warn("gorm query", attrs...)
-    } else {
-        telemetry.WithRequestID(ctx).Debug("gorm query", attrs...)
+
+    attrs := []any{"component", "gorm", "latency_ms", elapsed.Milliseconds(), "rows", rows, "sql", sql}
+    logger := telemetry.WithRequestID(ctx)
+
+    // Only the routine per-statement trace keeps the message "gorm query":
+    // config/otel-collector-config.yaml drops that exact string so the debug
+    // firehose never reaches Loki. Failures and slow statements get their own
+    // messages, or that same filter would swallow them too.
+    switch {
+    case err != nil && errors.Is(err, gorm.ErrRecordNotFound):
+        // Expected in repository first-time lookups.
+        logger.Debug("gorm query", append(attrs, "error", err.Error())...)
+    case err != nil:
+        logger.Warn("gorm query failed", append(attrs, "error", err.Error())...)
+    case elapsed >= slowQueryThreshold:
+        logger.Warn("gorm slow query", append(attrs, "threshold_ms", slowQueryThreshold.Milliseconds())...)
+    default:
+        logger.Debug("gorm query", attrs...)
     }
 }
 
-// errFromData checks if any variadic data element is a gorm.ErrRecordNotFound.
+// errFromData returns the first error among GORM's variadic log arguments.
 func errFromData(data []interface{}) error {
     for _, d := range data {
         if err, ok := d.(error); ok {

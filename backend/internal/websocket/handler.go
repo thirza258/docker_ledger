@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/binary"
 	"io"
 	"net/http"
 	"strconv"
@@ -29,12 +30,12 @@ func NewLogStreamHandler(service *services.ContainerService) *LogStreamHandler {
 // ServeHTTP upgrades to WebSocket and streams Docker logs.
 func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := telemetry.WithRequestID(r.Context())
-	log.Debug("ws request", "path", r.URL.Path)
 
 	path := strings.TrimPrefix(r.URL.Path, "/containers/")
 	parts := strings.Split(path, "/")
-	log.Debug("ws trimmed path", "path", path)
-	log.Debug("ws path parts", "parts", parts, "len", len(parts))
+	// One line for the whole parse. This used to be four separate debug lines
+	// per request, which buried everything else in the stream.
+	log.Debug("ws request", "path", r.URL.Path, "parts", parts)
 
 	if len(parts) != 3 || parts[1] != "logs" || parts[2] != "live" {
 		log.Warn("ws invalid path format")
@@ -56,8 +57,6 @@ func (h *LogStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			tail = t
 		}
 	}
-	log.Debug("ws upgrade request", "path", r.URL.Path)
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error("ws upgrade failed", "error", err)
@@ -116,18 +115,38 @@ func writeClose(conn *websocket.Conn, code int, reason string) {
 }
 
 func decodeLogChunk(data []byte) string {
-	// If data has at least 8 bytes and starts with STREAM_TYPE byte,
-	// we can try to parse header. But to keep it working, we'll simply
-	// strip the 8-byte header if present.
-	if len(data) < 8 {
-		return string(data) // assume plain text
-	}
-	// Check if first byte is 0x01 (stdout) or 0x02 (stderr)
-	if data[0] == 1 || data[0] == 2 {
-		msgLen := int(data[7]) | int(data[6])<<8 | int(data[5])<<16 | int(data[4])<<24
-		if 8+msgLen <= len(data) {
-			return string(data[8 : 8+msgLen])
+	// Docker multiplexes stdout and stderr into frames of an 8-byte header
+	// (stream type, then a big-endian payload length) followed by the payload.
+	// A single read routinely returns several frames, so every one of them has
+	// to be decoded — decoding only the first silently dropped log lines from
+	// the live view.
+	var out strings.Builder
+	for i := 0; i+8 <= len(data); {
+		if data[i] != 1 && data[i] != 2 {
+			// Not a framed stream (Docker sends raw text for TTY containers);
+			// hand back whatever is left as-is.
+			out.Write(data[i:])
+			return out.String()
 		}
+
+		msgLen := int(binary.BigEndian.Uint32(data[i+4 : i+8]))
+		i += 8
+		if msgLen == 0 {
+			continue // keepalive frame
+		}
+		if i+msgLen > len(data) {
+			// Partial frame at the end of the chunk: emit what arrived rather
+			// than dropping it.
+			out.Write(data[i:])
+			break
+		}
+		out.Write(data[i : i+msgLen])
+		i += msgLen
 	}
-	return string(data)
+
+	if out.Len() == 0 {
+		// Too short to be a frame at all — assume plain text.
+		return string(data)
+	}
+	return out.String()
 }

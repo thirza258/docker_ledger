@@ -103,7 +103,9 @@ processors:
         - 'IsMatch(body, "/health/docker")'
         # GORM record-not-found (double-filtered; also handled in app)
         - 'IsMatch(body, "record not found")'
-        # GORM slow-query trace noise at DEBUG level
+        # GORM per-statement trace noise at DEBUG level. This matches the
+        # exact message, so the backend's "gorm query failed" and
+        # "gorm slow query" warnings are deliberately NOT dropped.
         - 'IsMatch(body, "\"msg\":\"gorm query\"")'
         # Docker health-check exec probes
         - 'IsMatch(body, "healthcheck:")'

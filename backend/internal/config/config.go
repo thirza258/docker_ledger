@@ -6,6 +6,7 @@ import (
     "time"
 
     "github.com/joho/godotenv"
+    "github.com/thirzq/dockerledger/internal/telemetry"
     "github.com/thirzq/dockerledger/internal/wakeproxy"
 )
 
@@ -40,6 +41,11 @@ func Load() *Config {
     if err := godotenv.Load(); err != nil {
         slog.Warn("no .env file found, relying on environment variables")
     }
+
+    // The logger is built during package init, before the .env file above has
+    // been read. Re-apply LOG_LEVEL now so a level set there actually takes
+    // effect instead of being silently ignored.
+    telemetry.ApplyEnv()
 
     return &Config{
         DBHost:     getEnv("DB_HOST", "localhost"),
